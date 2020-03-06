@@ -1,0 +1,5 @@
+*pyc
+notebooks/*
+data/*
+!data/dictionary.txt
+out/
