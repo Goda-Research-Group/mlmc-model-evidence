@@ -1,0 +1,6 @@
+*pyc
+notebooks/*
+!notebooks/*.ipynb
+data/*
+!data/dictionary.txt
+out/
