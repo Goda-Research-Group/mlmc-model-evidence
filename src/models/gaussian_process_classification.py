@@ -34,6 +34,7 @@ class gaussian_process_classification:
 
     Available Methods:
     - fit: fit data to the model 
+    - predict_prob: predict p(y=1) given x
     - score: compute various scores (e.g. predictive log prob., ELBO, LM-ELBO)
     - plot_convergence: plot the convergence behavior of 2nd moment of difference estimator used in MLMC
     (Other methods are not supposed to be called from outside.)
@@ -45,12 +46,14 @@ class gaussian_process_classification:
         self.not_initialized = True
     
     
-    def __init_param(self, x):
+    def __init_param(self, x, learning_rate):
         N, D = x.shape
         M = self.M
-        # z represents inducing points, and alpha,beta are hyper-parameters of ARD kernel 
+        # z represents inducing points
+        self.z = x[np.random.choice(np.arange(N), size=M, replace=False)]
+
+        # alpha,beta are hyper-parameters of ARD kernel 
         self.theta = {
-            'z': tf.Variable(x[np.random.choice(np.arange(N), size=M, replace=False)]),
             'alpha': tf.Variable(np.ones([D]), dtype=tf.float64),
             'beta': tf.Variable(1., dtype=tf.float64)
         }
@@ -59,11 +62,13 @@ class gaussian_process_classification:
             'm': tf.Variable(np.zeros([M]), dtype=tf.float64),
             'CholS': tf.Variable(0.1*np.eye(M), dtype=tf.float64)
         }
+        self.optimizer = tf.keras.optimizers.Adam(learning_rate)
+
     
     
-    def __init_param_if_needed(self, x):
+    def __init_param_if_needed(self, x, learning_rate=0.005):
         if self.not_initialized:
-            self.__init_param(x)
+            self.__init_param(x, learning_rate)
             self.not_initialized=False
     
     
@@ -79,19 +84,18 @@ class gaussian_process_classification:
         elbo: scalar
         '''
 
-        z = theta['z']
         alpha = theta['alpha']
         beta = theta['beta']
         K = get_K(alpha, beta)
 
         N = y.shape[0]
-        M = z.shape[0]
+        M = self.M
 
         m = phi['m']
         CholS = phi['CholS']
 
         # sample u = f_0(z_1,...,z_M) from q
-        K_mm = K(z, z) + 1e-6 * tf.eye(M, dtype=tf.float64)
+        K_mm = K(self.z, self.z) + 1e-6 * tf.eye(M, dtype=tf.float64)
         CholK_mm = tf.linalg.cholesky(K_mm)
 
         p_u = tfp.distributions.MultivariateNormalTriL(loc=0., scale_tril=CholK_mm)
@@ -102,7 +106,7 @@ class gaussian_process_classification:
         # sample f conditionally given u = f_0(z_1,...,z_M)
         inv_CholK_mm = tf.linalg.inv(CholK_mm)
         inv_K_mm = tf.transpose(inv_CholK_mm)@inv_CholK_mm
-        K_nm = K(x, z)
+        K_nm = K(x, self.z)
         K_mn = tf.transpose(K_nm)
 
         mean_f = tf.linalg.einsum('ni,ij,nj->n', K_nm, inv_K_mm, u)
@@ -120,21 +124,20 @@ class gaussian_process_classification:
         return elbo
 
     
-    def __predictive_log_prob(self, x, y, theta, phi, n_MC):
+    def __predictive_log_likelihood(self, x, y, theta, phi, n_MC=64):
 
-        z = theta['z']
         alpha = theta['alpha']
         beta = theta['beta']
         K = get_K(alpha, beta)
 
         N = y.shape[0]
-        M = z.shape[0]
+        M = self.M
 
         m = phi['m']
         CholS = phi['CholS']
 
         # sample u = f_0(z_1,...,z_M) from q
-        K_mm = K(z, z) + 1e-6 * tf.eye(M, dtype=tf.float64)
+        K_mm = K(self.z, self.z) + 1e-6 * tf.eye(M, dtype=tf.float64)
         CholK_mm = tf.linalg.cholesky(K_mm)
 
         p_u = tfp.distributions.MultivariateNormalTriL(loc=0., scale_tril=CholK_mm)
@@ -145,7 +148,7 @@ class gaussian_process_classification:
         # sample f conditionally given u = f_0(z_1,...,z_M)
         inv_CholK_mm = tf.linalg.inv(CholK_mm)
         inv_K_mm = tf.transpose(inv_CholK_mm)@inv_CholK_mm
-        K_nm = K(x, z)
+        K_nm = K(x, self.z)
         K_mn = tf.transpose(K_nm)
 
         mean_f = tf.linalg.einsum('ni,ij,nj->n', K_nm, inv_K_mm, u)
@@ -156,15 +159,13 @@ class gaussian_process_classification:
         q_f = tfp.distributions.Normal(loc=mean_f, scale=var_f)
         f = q_f.sample(n_MC)
 
-        # compute LMELBO estimate
+        # compute p(y=1)
         p_y = tfp.distributions.Bernoulli(logits=f)
-        log_prob_y = tf.reduce_mean( tf_logmeanexp( p_y.log_prob(y) , axis=0) ) 
-        kl_qu_pu = tfp.distributions.kl_divergence(q_u, p_u)
-        lmelbo = log_prob_y
-        return lmelbo
+        log_prob = tf_logmeanexp( p_y.log_prob(y) , axis=0) 
+        return log_prob
     
     
-    def __LMELBO(self, x, y, theta, phi, n_MC):
+    def __LMELBO(self, x, y, theta, phi, n_MC=64):
         """
         Compute (averaged) LMELBO by Nested MC
 
@@ -178,19 +179,18 @@ class gaussian_process_classification:
         Returns:
         lmelbo: scalar estimate of averaged lmelbo over sample points.
         """
-        z = theta['z']
         alpha = theta['alpha']
         beta = theta['beta']
         K = get_K(alpha, beta)
 
         N = y.shape[0]
-        M = z.shape[0]
+        M = self.M
 
         m = phi['m']
         CholS = phi['CholS']
 
         # sample u = f_0(z_1,...,z_M) from q
-        K_mm = K(z, z) + 1e-6 * tf.eye(M, dtype=tf.float64)
+        K_mm = K(self.z, self.z) + 1e-6 * tf.eye(M, dtype=tf.float64)
         CholK_mm = tf.linalg.cholesky(K_mm)
 
         p_u = tfp.distributions.MultivariateNormalTriL(loc=0., scale_tril=CholK_mm)
@@ -201,7 +201,7 @@ class gaussian_process_classification:
         # sample f conditionally given u = f_0(z_1,...,z_M)
         inv_CholK_mm = tf.linalg.inv(CholK_mm)
         inv_K_mm = tf.transpose(inv_CholK_mm)@inv_CholK_mm
-        K_nm = K(x, z)
+        K_nm = K(x, self.z)
         K_mn = tf.transpose(K_nm)
 
         mean_f = tf.linalg.einsum('ni,ij,nj->n', K_nm, inv_K_mm, u)
@@ -218,31 +218,9 @@ class gaussian_process_classification:
         kl_qu_pu = tfp.distributions.kl_divergence(q_u, p_u)
         lmelbo = log_prob_y - kl_qu_pu / self.N_total
         return lmelbo
+        
     
-    
-    def __dconditional_likelihood(self, x, y, mean_f, var_f, level):
-
-        N = y.shape[0]
-        # sample f_n's
-        q_f = tfp.distributions.Normal(loc=mean_f, scale=var_f)
-        n_MC = 2**level
-        f = q_f.sample(n_MC)
-
-        # sample conditional likelihoods
-        p_y = tfp.distributions.Bernoulli(logits=f)
-        w = p_y.log_prob(y)
-        w = tf.reshape(w, [n_MC,N])
-
-        if level==0:
-            dL = tf.reshape(w, [N]) 
-        else:
-            dL = tf_logmeanexp(w, axis=0)\
-                    - (1/2.) * tf_logmeanexp(w[:n_MC//2 ], axis=0)\
-                    - (1/2.) * tf_logmeanexp(w[ n_MC//2:], axis=0)
-        return tf.reduce_mean( dL )
-    
-    
-    def __LMELBO_MLMC(self, x, y, theta, phi, max_level=8, w0=1-2.**(-3/2), b=2, randomize=False):
+    def __LMELBO_MLMC(self, x, y, theta, phi, max_level=6, w0=1-2.**(-3/2), b=2, randomize=False):
         """
         Compute (averaged) LMELBO by MLMC
 
@@ -254,29 +232,28 @@ class gaussian_process_classification:
         max_level: integer
         w0: the proportion of total samples in (x,y) used at the level 0.
             in other words, 100*(1-w0) % of the total samples are used for estimating the correction term.
-        b: scalar. the second moment of the coupled difference estimator (dIWELBO) must decrease at a rate of O(2^(-b*level)).
+        b: scalar. the second moment of the coupled difference estimator (dLMELBO) must decrease at a rate of O(2^(-b*level)).
         randomize: whether to use randomization of MLMC.
 
         Returns:
         lmelbo: scalar estimate of averaged lmelbo over sample points.
         """
+        N = y.shape[0]
+        M = self.M
+        
         # unpack parameters
-        idx = tf.random.shuffle(tf.range(x.shape[0]))
+        idx = tf.random.shuffle(tf.range(N))
         x = x[idx]
         y = y[idx]
-        z = theta['z']
         alpha = theta['alpha']
         beta = theta['beta']
         K = get_K(alpha, beta)
-
-        N = y.shape[0]
-        M = z.shape[0]
 
         m = phi['m']
         CholS = phi['CholS']
 
         # calculate KL divergence of p(u) and q(u) of u = f_0(z_1,...,z_M)
-        K_mm = K(z, z) + 1e-6 * tf.eye(M, dtype=tf.float64)
+        K_mm = K(self.z, self.z) + 1e-6 * tf.eye(M, dtype=tf.float64)
         CholK_mm = tf.linalg.cholesky(K_mm)
 
         p_u = tfp.distributions.MultivariateNormalTriL(loc=0., scale_tril=CholK_mm)
@@ -287,7 +264,7 @@ class gaussian_process_classification:
         u = q_u.sample(N)
         inv_CholK_mm = tf.linalg.inv(CholK_mm)
         inv_K_mm = tf.transpose(inv_CholK_mm)@inv_CholK_mm
-        K_nm = K(x, z)
+        K_nm = K(x, self.z)
         K_mn = tf.transpose(K_nm)
 
         mean_f = tf.linalg.einsum('ni,ij,nj->n', K_nm, inv_K_mm, u)
@@ -312,9 +289,9 @@ class gaussian_process_classification:
             Ns = np.array([np.math.ceil(w*N) for w in weights], dtype=np.int)
             Ns[0] = N - sum(Ns[1:])
         else:
-            raise(Exception("Invarid argument for 'randomize' of function IWELBO_MLMC. It must be True or False."))
+            raise(Exception("Invarid argument for 'randomize' of function LMELBO_MLMC. It must be True or False."))
 
-        # compute dIWELBO's using disjoint samples at each level and sum them up
+        # compute dLMELBO's using disjoint samples at each level and sum them up
         offset = 0
         lmelbo = - kl_qu_pu / self.N_total
         for l in levels:
@@ -335,21 +312,42 @@ class gaussian_process_classification:
         return lmelbo
 
     
+    def __dconditional_likelihood(self, x, y, mean_f, var_f, level):
+
+        N = y.shape[0]
+        # sample f_n's
+        q_f = tfp.distributions.Normal(loc=mean_f, scale=var_f)
+        n_MC = 2**level
+        f = q_f.sample(n_MC)
+
+        # sample conditional likelihoods
+        p_y = tfp.distributions.Bernoulli(logits=f)
+        log_p_y = p_y.log_prob(y)
+        log_p_y = tf.reshape(log_p_y, [n_MC, N])
+
+        if level==0:
+            dL = tf.reshape(log_p_y, [N]) 
+        else:
+            dL = tf_logmeanexp(log_p_y, axis=0)\
+                    - (1/2.) * tf_logmeanexp(log_p_y[:n_MC//2 , :], axis=0)\
+                    - (1/2.) * tf_logmeanexp(log_p_y[ n_MC//2:, :], axis=0)
+        return tf.reduce_mean( dL )
+
+    
     def __pointwise_dconditional_likelihood(self, x, y, theta, phi, level):
 
-        z = theta['z']
         alpha = theta['alpha']
         beta = theta['beta']
         K = get_K(alpha, beta)
 
         N = y.shape[0]
-        M = z.shape[0]
+        M = self.M
 
         m = phi['m']
         CholS = phi['CholS']
 
         # sample u = f_0(z_1,...,z_M) from q
-        K_mm = K(z, z) + 1e-6 * tf.eye(M, dtype=tf.float64)
+        K_mm = K(self.z, self.z) + 1e-6 * tf.eye(M, dtype=tf.float64)
         CholK_mm = tf.linalg.cholesky(K_mm)
 
         p_u = tfp.distributions.MultivariateNormalTriL(loc=0., scale_tril=CholK_mm)
@@ -359,7 +357,7 @@ class gaussian_process_classification:
         # sample f conditionally given u = f_0(z_1,...,z_M)
         inv_CholK_mm = tf.linalg.inv(CholK_mm)
         inv_K_mm = tf.transpose(inv_CholK_mm)@inv_CholK_mm
-        K_nm = K(x, z)
+        K_nm = K(x, self.z)
         K_mn = tf.transpose(K_nm)
 
         mean_f = tf.linalg.einsum('ni,ij,nj->n', K_nm, inv_K_mm, u)
@@ -373,27 +371,27 @@ class gaussian_process_classification:
 
         # compute ELBO estimate
         p_y = tfp.distributions.Bernoulli(logits=f)
-        w = p_y.log_prob(y)
-        w = tf.reshape(w, [n_MC,N])
+        log_p_y = p_y.log_prob(y)
+        log_p_y = tf.reshape(log_p_y, [n_MC,N])
         if level==0:
-            return tf_logmeanexp(w, axis=0) 
+            return tf_logmeanexp(log_p_y, axis=0) 
         else:
-            return tf_logmeanexp(w, axis=0)\
-                    - (1/2.) * tf_logmeanexp(w[:n_MC//2 ], axis=0)\
-                    - (1/2.) * tf_logmeanexp(w[ n_MC//2:], axis=0)
+            return tf_logmeanexp(log_p_y, axis=0)\
+                    - (1/2.) * tf_logmeanexp(log_p_y[:n_MC//2 ], axis=0)\
+                    - (1/2.) * tf_logmeanexp(log_p_y[ n_MC//2:], axis=0)
     
     
-    def plot_convergence(self, x,y,max_level):
+    def plot_convergence(self, x, y, max_level):
         dcond_L = lambda l: self.__pointwise_dconditional_likelihood(x, y, self.theta, self.phi, level=l).numpy()
         plt.plot([np.mean(dcond_L(l)**2) for l in range(10)])
         plt.yscale('log')
         plt.xlabel('level')
-        plt.ylabel(r'$\mathrm{E}||\nabla\ (\Delta \mathrm{LM}$-${ELBO})\ ||_2^2$')
+        plt.ylabel(r'$\mathrm{E}||\ (\Delta \mathrm{LM}$-${ELBO})\ ||_2^2$')
         
     
     def fit(self, x, y, learning_rate=0.01, n_iter=401, objective='ELBO', obj_param={}, verbose=True):
         
-        self.__init_param_if_needed(x)
+        self.__init_param_if_needed(x, learning_rate=learning_rate)
         
         if objective=='ELBO':
             obj_func = lambda x,y,theta,phi: self.__ELBO(x, y, theta, phi)
@@ -402,7 +400,6 @@ class gaussian_process_classification:
         elif objective=='LMELBO_MLMC':
             obj_func = lambda x,y,theta,phi: self.__LMELBO_MLMC(x, y, theta, phi, **obj_param)
         
-        optimizer = tf.keras.optimizers.Adam(learning_rate)
         losses = []
         print_interval = n_iter//20
         for t in range(n_iter):
@@ -414,20 +411,24 @@ class gaussian_process_classification:
 
             gradients = list(dtheta.values()) + list(dphi.values())
             variables = list(self.theta.values()) + list(self.phi.values())
-            optimizer.apply_gradients(zip(gradients, variables))
-
+            self.optimizer.apply_gradients(zip(gradients, variables))
+        
             losses.append(loss.numpy())
             if t%print_interval+1==print_interval and verbose==True:
                 print('#iter: {}-{}\t{}'.format(t-print_interval+1, t, np.mean(losses)))
                 losses = []
     
+    def predict_prob(self, x):
+        self.__init_param_if_needed(x)
+        return tf.exp(self.__predictive_log_likelihood(x, tf.ones([x.shape[0]]), self.theta, self.phi))
     
-    def score(self, x, y, objective='predictive_log_prob', obj_param={'n_MC':64}, verbose=True):
+    def score(self, x, y, objective='predictive_likelihood', obj_param={}, verbose=True):
         
         self.__init_param_if_needed(x)
 
-        if objective=='predictive_log_prob':
-            return self.__predictive_log_prob(x, y, self.theta, self.phi, **obj_param)
+        if objective=='predictive_likelihood':
+            logL = self.__predictive_log_likelihood(x, y, self.theta, self.phi, **obj_param)
+            return tf.reduce_mean(logL)
         elif objective=='ELBO':
             return self.__ELBO(x, y, self.theta, self.phi)
         elif objective=='LMELBO':
