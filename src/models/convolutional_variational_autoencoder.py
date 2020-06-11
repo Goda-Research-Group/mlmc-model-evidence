@@ -140,7 +140,7 @@ class IWAE_MLMC(IWAE):
             'enc': tf.keras.optimizers.Adam(2e-4)
         }
         
-    def compute_diwelbos(self, x, L):
+    def _compute_diwelbos(self, x, L):
         prob_ratios = self._compute_prob_ratios(x, 2**L)
         if L==0:
             return self.compute_iwelbos(prob_ratios)
@@ -153,7 +153,7 @@ class IWAE_MLMC(IWAE):
             raise ValueError("Level L must be a non-negative integer.")
             
     def _compute_diwelbo(self, x, L):
-        return tf.reduce_mean(self.compute_diwelbos(x, L))
+        return tf.reduce_mean(self._compute_diwelbos(x, L))
     
     def _compute_iwelbo_mlmc(self, x, max_level=6, w0=1-2.**(-3/2), b=2, randomize=False):
         
@@ -205,7 +205,7 @@ class IWAE_MLMC(IWAE):
         
         if loss=='elbo':
             with tf.GradientTape() as tape:
-                loss =  - self.compute_iwelbo(x, K)
+                loss =  - self.compute_iwelbo(x, 1)
                 gradients = tape.gradient(loss, self.trainable_variables)
                 self._optimizer.apply_gradients(zip(gradients, self.trainable_variables))
             return 
