@@ -201,7 +201,7 @@ class IWAE_MLMC(IWAE):
     def compute_iwelbo_rmlmc(self, x, max_level, w0=1-2.**(-3/2), b=2):
         return self._compute_iwelbo_mlmc(x, max_level, w0, b, randomize=True)
 
-    def train_step(self, x, K=8, loss='iwelbo'):
+    def train_step(self, x, K=8, loss='iwelbo', max_level=3, w0=1-2.**(-3/2), b=2):
         
         if loss=='elbo':
             with tf.GradientTape() as tape:
@@ -219,10 +219,12 @@ class IWAE_MLMC(IWAE):
         # train decoder
         with tf.GradientTape() as tape:
             if loss=='iwelbo_mlmc':
-                _loss = - self.compute_iwelbo_mlmc(x, K)
+                _loss = - self.compute_iwelbo_mlmc(x, max_level, w0, b)
+            elif loss=='iwelbo_rmlmc':
+                _loss = - self.compute_iwelbo_rmlmc(x, max_level, w0, b)
             elif loss == 'iwelbo':
                 _loss = - self.compute_iwelbo(x, K)
             else:
-                raise ValueError("loss must be iwelbo_mlmc or iwelbo")
+                raise ValueError("Argument 'loss' must be one of elbo, iwelbo, iwelbo_mlmc or iwelbo_rmlmc.")
             gradients = tape.gradient(_loss, self._decoder.trainable_variables)
             self._optimizers['dec'].apply_gradients(zip(gradients, self._decoder.trainable_variables))
