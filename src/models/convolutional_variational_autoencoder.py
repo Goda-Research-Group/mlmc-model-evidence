@@ -1,7 +1,5 @@
 import numpy as np
 import tensorflow as tf
-import matplotlib.pyplot as plt
-
 
 #utility funcs
 float_type = np.float32
@@ -73,10 +71,10 @@ class IWAE(tf.keras.Model):
             return probs
         return logits
 
-    # original implementation from CVAE tutorial
-    # this can be used for sanity check of the code 
-    # as E[comp_elbo(x)] = E[comp_iwelbo(x,1)]
     def compute_elbo(self, x):
+        # original implementation from CVAE tutorial
+        # this can be used for sanity check of the code 
+        # as E[comp_elbo(x)] = E[comp_iwelbo(x,1)]
         mean, logvar = self._encode(x)
         z = self._reparameterize(mean, logvar)
         x_logit = self._decode(z)
@@ -86,6 +84,30 @@ class IWAE(tf.keras.Model):
         logqz_x = log_normal_pdf(z, mean, logvar)
         return tf.reduce_mean(logpx_z + logpz - logqz_x)
     
+    def train_step(self, x):
+        """Executes one training step and returns the loss.
+
+        This function computes the loss and gradients, and uses the latter to
+        update the model's parameters.
+        """
+        with tf.GradientTape() as tape:
+            loss =  - self.compute_elbo(x)
+            gradients = tape.gradient(loss, self.trainable_variables)
+            self._optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+            
+
+class IWAE_MLMC(IWAE):
+    
+    def __init__(self, latent_dim):
+        super(IWAE_MLMC, self).__init__(latent_dim)
+        self.__init_optimizers()
+        
+    def __init_optimizers(self):
+        self._optimizers = {
+            'dec': tf.keras.optimizers.Adam(2e-4),
+            'enc': tf.keras.optimizers.Adam(2e-4)
+        }
+
     def _compute_prob_ratios(self, x, K):
         mean, logvar = self._encode(x)
         # repeat K Monte Carlo samples
@@ -100,65 +122,52 @@ class IWAE(tf.keras.Model):
         logqz_x = log_normal_pdf(z, mean_rep, logvar_rep)
         prob_ratios = tf.reshape(logpx_z + logpz - logqz_x, shape=[-1,K])
         return prob_ratios
-
-    def compute_iwelbos(self, prob_ratios):
-        return tf_reduce_logmeanexp(prob_ratios, axis=1)
     
-    def compute_iwelbo(self, x, K):
+    def _compute_objectives(self, prob_ratios, obj):
+        if obj=='iwelbo': 
+            return tf_reduce_logmeanexp(prob_ratios, axis=1)
+        # log p + D[q||p]
+        elif obj=='pearson_ubo':
+            return 0.5*tf_reduce_logmeanexp(2.*prob_ratios, axis=1)
+        elif obj=='hellinger_lbo':
+            return 2.*tf_reduce_logmeanexp(0.5*prob_ratios, axis=1)
+        elif obj=='neyman_lbo':
+            return -1.*tf_reduce_logmeanexp(-prob_ratios, axis=1)
+        # log p - D[p||q]
+        elif obj=='pearson_lbo':
+            return  -0.5*tf_reduce_logmeanexp(-prob_ratios, axis=1)\
+                    +0.5*tf_reduce_logmeanexp(prob_ratios, axis=1)
+        elif obj=='hellinger_ubo':
+            return -2*tf_reduce_logmeanexp(0.5*prob_ratios, axis=1)\
+                   +2*tf_reduce_logmeanexp(prob_ratios, axis=1)
+        elif obj=='neyman_ubo':
+            return  tf_reduce_logmeanexp(2.*prob_ratios, axis=1)\
+                    -tf_reduce_logmeanexp(prob_ratios, axis=1)
+        else: 
+            print(obj)
+            raise ValueError("given input 'obj' is invalid.")
+
+    def compute_objective(self, x, K, obj='iwelbo'):
         prob_ratios = self._compute_prob_ratios(x, K)
-        return tf.reduce_mean(self.compute_iwelbos(prob_ratios))
+        objectives = self._compute_objectives(prob_ratios, obj)
+        return tf.reduce_mean(objectives)
     
-    def train_step(self, x, K):
-        """Executes one training step and returns the loss.
-
-        This function computes the loss and gradients, and uses the latter to
-        update the model's parameters.
-        """
-        with tf.GradientTape() as tape:
-            loss =  - self.compute_iwelbo(x, K)
-            gradients = tape.gradient(loss, self.trainable_variables)
-            self._optimizer.apply_gradients(zip(gradients, self.trainable_variables))
-            
-    def generate_images(self, epoch, test_sample):
-        mean, logvar = self._encode(test_sample)
-        z = self._reparameterize(mean, logvar)
-        predictions = self._sample(z)
-        fig = plt.figure(figsize=(4, 4))
-
-        for i in range(predictions.shape[0]):
-            plt.subplot(4, 4, i + 1)
-            plt.imshow(predictions[i, :, :, 0], cmap='gray')
-            plt.axis('off')
-
-            
-class IWAE_MLMC(IWAE):
-    
-    def __init__(self, latent_dim):
-        super(IWAE_MLMC, self).__init__(latent_dim)
-        self._optimizers = {
-            'dec': tf.keras.optimizers.Adam(2e-4),
-            'enc': tf.keras.optimizers.Adam(2e-4)
-        }
-        
-    def _compute_diwelbos(self, x, L):
-        prob_ratios = self._compute_prob_ratios(x, 2**L)
-        if L==0:
-            return self.compute_iwelbos(prob_ratios)
-        elif L>0:
-            diwelbos = self.compute_iwelbos(prob_ratios)
-            diwelbos -= (1/2.)*self.compute_iwelbos(prob_ratios[:,:2**(L-1) ])
-            diwelbos -= (1/2.)*self.compute_iwelbos(prob_ratios[:, 2**(L-1):])
-            return diwelbos
+    def _compute_dobjective(self, x, K, obj):
+        prob_ratios = self._compute_prob_ratios(x, K)
+        if K==1:
+                diff = self._compute_objectives(prob_ratios, obj)
+        elif K>1:
+            assert(K%2==0)
+            diff = self._compute_objectives(prob_ratios, obj)
+            diff -= (1/2.)*self._compute_objectives(prob_ratios[:,:K//2 ], obj)
+            diff -= (1/2.)*self._compute_objectives(prob_ratios[:, K//2:], obj)
         else:
-            raise ValueError("Level L must be a non-negative integer.")
-            
-    def _compute_diwelbo(self, x, L):
-        return tf.reduce_mean(self._compute_diwelbos(x, L))
+            raise ValueError("Level K must be evenly-divisible positive integer.")
+        return tf.reduce_mean(diff)
     
-    def _compute_iwelbo_mlmc(self, x, max_level=6, w0=1-2.**(-3/2), b=2, randomize=False):
-        
+    def compute_objective_mlmc(self, x, max_level=6, w0=1-2.**(-3/2), b=2, randomize=False, obj='iwelbo'):
         N = x.shape[0]
-        
+
         # determine proportions of the number of samples among levels
         if max_level==0:
             levels = np.array([0])
@@ -180,51 +189,39 @@ class IWAE_MLMC(IWAE):
 
         # compute dLMELBO's using disjoint samples at each level and sum them up
         offset = 0
-        iwelbo = 0
+        out = 0
         for l in levels:
             if Ns[l]==0:
                 continue
             x_tmp = x[offset:offset+Ns[l]]
-            
             if randomize==True:
-                iwelbo += self._compute_diwelbo(x_tmp, l) * Ns[l] / N / weights[l]   
+                out += self._compute_dobjective(x_tmp, 2**l, obj) * Ns[l] / N / weights[l]   
             elif randomize==False:
-                iwelbo += self._compute_diwelbo(x_tmp, l)
-
+                out += self._compute_dobjective(x_tmp, 2**l, obj)
             offset += Ns[l]
+        return out
 
-        return iwelbo
-
-    def compute_iwelbo_mlmc(self, x, max_level, w0=1-2.**(-3/2), b=2):
-        return self._compute_iwelbo_mlmc(x, max_level, w0, b, randomize=False)
-    
-    def compute_iwelbo_rmlmc(self, x, max_level, w0=1-2.**(-3/2), b=2):
-        return self._compute_iwelbo_mlmc(x, max_level, w0, b, randomize=True)
-
-    def train_step(self, x, K=8, loss='iwelbo', max_level=3, w0=1-2.**(-3/2), b=2):
+    def train_step(self, x, K=8, max_level=3, w0=1-2.**(-3/2), b=2, obj='elbo'):
         
-        if loss=='elbo':
-            with tf.GradientTape() as tape:
-                loss =  - self.compute_iwelbo(x, 1)
-                gradients = tape.gradient(loss, self.trainable_variables)
-                self._optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+        if obj=='elbo':
+            super(IWAE_MLMC, self).train_step(x)
             return 
         
         # train encoder
         with tf.GradientTape() as tape:
-            _loss = - self.compute_elbo(x)
-            gradients = tape.gradient(_loss, self._encoder.trainable_variables)
+            loss = - self.compute_elbo(x)
+            gradients = tape.gradient(loss, self._encoder.trainable_variables)
             self._optimizers['enc'].apply_gradients(zip(gradients, self._encoder.trainable_variables))
         
         # train decoder
         with tf.GradientTape() as tape:
-            if loss=='iwelbo_mlmc':
-                _loss = - self.compute_iwelbo_mlmc(x, max_level, w0, b)
-            elif loss=='iwelbo_rmlmc':
-                _loss = - self.compute_iwelbo_rmlmc(x, max_level, w0, b)
-            elif loss == 'iwelbo':
-                _loss = - self.compute_iwelbo(x, K)
+            if obj=='iwelbo_mlmc':
+                loss = - self.compute_objective_mlmc(x, max_level, w0, b, randomize=False, obj='iwelbo')
+            elif obj=='iwelbo_rmlmc':
+                loss = - self.compute_objective_mlmc(x, max_level, w0, b, randomize=True, obj='iwelbo')
+            elif obj == 'iwelbo':
+                loss = - self.compute_objective(x, K, obj)
             else:
                 raise ValueError("Argument 'loss' must be one of elbo, iwelbo, iwelbo_mlmc or iwelbo_rmlmc.")
-            gradients = tape.gradient(_loss, self._decoder.trainable_variables)
+            gradients = tape.gradient(loss, self._decoder.trainable_variables)
             self._optimizers['dec'].apply_gradients(zip(gradients, self._decoder.trainable_variables))
