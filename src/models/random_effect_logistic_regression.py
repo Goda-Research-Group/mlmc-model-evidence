@@ -18,25 +18,26 @@ def tf_logmeanexp(ary, axis=1, keepdims=False):
 
 class random_effect_logistic_regression:
     
-    
-    def __init__(self, x, alpha=0., beta0=0., beta=None):
+    def __init__(self, x, alpha=None, beta0=None, beta=None):
         self.N, self.T, self.D  = x.shape
+        
+        alpha = 0, if alpha is None
+        beta0 = 0, if beta0 is None
+        beta = np.zeros([self.D], dtype=np.float64) if beta is None
         
         self.alpha = tf.Variable(alpha, dtype=tf.float64)
         self.beta0 = tf.Variable(beta0, dtype=tf.float64)
-        beta = np.zeros([self.D], dtype=np.float64) if beta is None
         self.beta  = tf.variable(beta,  dtype=tf.float64)
     
-    def sigmoid_normal_prob(x, beta0, beta, alpha):
+    def sigmoid_normal_prob(x):
         # Compute p(Y=1|X=x) for N samples of x_n
-        N, T, D  = x.shape
-        kappa = 1 / (1 + np.pi*tf.math.softplus(alpha)/8)**(1/2)
-        return tf.math.sigmoid( kappa * (beta0 + tf.reshape( x@tf.reshape(beta, [D,1]), [N, T])) )
+        kappa = 1 / (1 + np.pi*tf.math.softplus(self.alpha)/8)**(1/2)
+        return tf.math.sigmoid( kappa * (self.beta0 + tf.reshape( x@tf.reshape(self.beta, [self.D,1]), [self.N, self.T])) )
     
     
-    def sigmoid_normal_likelihood(x, y, beta0, beta, alpha):
+    def sigmoid_normal_likelihood(x, y):
         # Compute log p(Y=y|X=x) for N samples of (x_n, y_n) and sum them up
-        pred_prob = sigmoid_normal_prob(x, beta0, beta, alpha)
+        pred_prob = sigmoid_normal_prob(x, self.beta0, self.beta, self.alpha)
         score = tf.reduce_mean(tf.reduce_sum(
             tf.math.log(pred_prob)*y + tf.math.log(1-pred_prob)*(1-y), 
             axis=1))
@@ -60,8 +61,11 @@ class random_effect_logistic_regression:
         sigma: 1-d array of size [N]
         """
 
-        N, T, D  = x.shape
-        z = np.zeros([N, 1])
+        z = np.zeros([self.N, 1])
+        alpha = self.alpha.numpy()
+        beta0 = self.beta0.numpy()
+        beta  = self.beta.numpy()
+        
         _sig = lambda z: sigmoid( z + beta0 + x@beta )
 
         # Newton optimization to calculate the MAP of z|x,y
