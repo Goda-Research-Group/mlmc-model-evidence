@@ -108,7 +108,7 @@ class IWAE_MLMC(IWAE):
             'enc': tf.keras.optimizers.Adam(2e-4)
         }
 
-    def _compute_prob_ratios(self, x, K):
+    def _compute_log_prob_ratios(self, x, K):
         mean, logvar = self._encode(x)
         # repeat K Monte Carlo samples
         x_rep = tf.repeat(x, K, axis=0)# [x1,x2,...] -> [x1, x1, ...,x1, x2, x2, ...]
@@ -120,47 +120,47 @@ class IWAE_MLMC(IWAE):
         logpx_z = -tf.reduce_sum(cross_ent, axis=[1, 2, 3])
         logpz = log_normal_pdf(z, 0., 0.)
         logqz_x = log_normal_pdf(z, mean_rep, logvar_rep)
-        prob_ratios = tf.reshape(logpx_z + logpz - logqz_x, shape=[-1,K])
-        return prob_ratios
+        log_prob_ratios = tf.reshape(logpx_z + logpz - logqz_x, shape=[-1,K])
+        return log_prob_ratios
     
-    def _compute_objectives(self, prob_ratios, obj):
+    def _compute_objectives(self, log_prob_ratios, obj):
         if obj=='iwelbo': 
-            return tf_reduce_logmeanexp(prob_ratios, axis=1)
+            return tf_reduce_logmeanexp(log_prob_ratios, axis=1)
         # log p + D[q||p]
         elif obj=='pearson_ubo':
-            return 0.5*tf_reduce_logmeanexp(2.*prob_ratios, axis=1)
+            return 0.5*tf_reduce_logmeanexp(2.*log_prob_ratios, axis=1)
         elif obj=='hellinger_lbo':
-            return 2.*tf_reduce_logmeanexp(0.5*prob_ratios, axis=1)
+            return 2.*tf_reduce_logmeanexp(0.5*log_prob_ratios, axis=1)
         elif obj=='neyman_lbo':
-            return -1.*tf_reduce_logmeanexp(-prob_ratios, axis=1)
+            return -1.*tf_reduce_logmeanexp(-log_prob_ratios, axis=1)
         # log p - D[p||q]
         elif obj=='pearson_lbo':
-            return  -0.5*tf_reduce_logmeanexp(-prob_ratios, axis=1)\
-                    +0.5*tf_reduce_logmeanexp(prob_ratios, axis=1)
+            return  -0.5*tf_reduce_logmeanexp(-log_prob_ratios, axis=1)\
+                    +0.5*tf_reduce_logmeanexp(log_prob_ratios, axis=1)
         elif obj=='hellinger_ubo':
-            return -2*tf_reduce_logmeanexp(0.5*prob_ratios, axis=1)\
-                   +2*tf_reduce_logmeanexp(prob_ratios, axis=1)
+            return -2*tf_reduce_logmeanexp(0.5*log_prob_ratios, axis=1)\
+                   +2*tf_reduce_logmeanexp(log_prob_ratios, axis=1)
         elif obj=='neyman_ubo':
-            return  tf_reduce_logmeanexp(2.*prob_ratios, axis=1)\
-                    -tf_reduce_logmeanexp(prob_ratios, axis=1)
+            return  tf_reduce_logmeanexp(2.*log_prob_ratios, axis=1)\
+                    -tf_reduce_logmeanexp(log_prob_ratios, axis=1)
         else: 
             print(obj)
             raise ValueError("given input 'obj' is invalid.")
 
     def compute_objective(self, x, K, obj='iwelbo'):
-        prob_ratios = self._compute_prob_ratios(x, K)
-        objectives = self._compute_objectives(prob_ratios, obj)
+        log_prob_ratios = self._compute_log_prob_ratios(x, K)
+        objectives = self._compute_objectives(log_prob_ratios, obj)
         return tf.reduce_mean(objectives)
     
     def _compute_dobjective(self, x, K, obj):
-        prob_ratios = self._compute_prob_ratios(x, K)
+        log_prob_ratios = self._compute_log_prob_ratios(x, K)
         if K==1:
-                diff = self._compute_objectives(prob_ratios, obj)
+                diff = self._compute_objectives(log_prob_ratios, obj)
         elif K>1:
             assert(K%2==0)
-            diff = self._compute_objectives(prob_ratios, obj)
-            diff -= (1/2.)*self._compute_objectives(prob_ratios[:,:K//2 ], obj)
-            diff -= (1/2.)*self._compute_objectives(prob_ratios[:, K//2:], obj)
+            diff = self._compute_objectives(log_prob_ratios, obj)
+            diff -= (1/2.)*self._compute_objectives(log_prob_ratios[:,:K//2 ], obj)
+            diff -= (1/2.)*self._compute_objectives(log_prob_ratios[:, K//2:], obj)
         else:
             raise ValueError("Level K must be evenly-divisible positive integer.")
         return tf.reduce_mean(diff)
