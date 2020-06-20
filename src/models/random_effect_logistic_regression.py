@@ -18,24 +18,24 @@ def tf_logmeanexp(ary, axis=1, keepdims=False):
 
 class random_effect_logistic_regression:
     
-    def __init__(self, x, alpha=None, beta0=None, beta=None):
-        self.N, self.T, self.D  = x.shape
+    def __init__(self, alpha=None, beta0=None, beta=None):
         
-        alpha = 0, if alpha is None
-        beta0 = 0, if beta0 is None
-        beta = np.zeros([self.D], dtype=np.float64) if beta is None
+        if alpha is None: alpha = 0. 
+        if beta0 is None: beta0 = 0. 
+        if beta is None:  beta = np.zeros([self.D], dtype=np.float64) 
         
         self.alpha = tf.Variable(alpha, dtype=tf.float64)
         self.beta0 = tf.Variable(beta0, dtype=tf.float64)
-        self.beta  = tf.variable(beta,  dtype=tf.float64)
+        self.beta  = tf.Variable(beta,  dtype=tf.float64)
     
-    def sigmoid_normal_prob(x):
+    def sigmoid_normal_prob(self, x):
+        (N, T, D) = x.shape
         # Compute p(Y=1|X=x) for N samples of x_n
         kappa = 1 / (1 + np.pi*tf.math.softplus(self.alpha)/8)**(1/2)
-        return tf.math.sigmoid( kappa * (self.beta0 + tf.reshape( x@tf.reshape(self.beta, [self.D,1]), [self.N, self.T])) )
+        return tf.math.sigmoid( kappa * (self.beta0 + tf.reshape( x@tf.reshape(self.beta, [D,1]), [N, T])) )
     
     
-    def sigmoid_normal_likelihood(x, y):
+    def sigmoid_normal_likelihood(self, x, y):
         # Compute log p(Y=y|X=x) for N samples of (x_n, y_n) and sum them up
         pred_prob = sigmoid_normal_prob(x, self.beta0, self.beta, self.alpha)
         score = tf.reduce_mean(tf.reduce_sum(
@@ -44,7 +44,7 @@ class random_effect_logistic_regression:
         return score
 
 
-    def laplace_approx(x, y):
+    def laplace_approx(self, x, y):
         """
         Compute the mean and the varince of the 
         Laplace approximation of p(z|x,y) for each sample point.
@@ -57,8 +57,8 @@ class random_effect_logistic_regression:
         mu: 1-d array of size [N]
         sigma: 1-d array of size [N]
         """
-
-        z = np.zeros([self.N, 1])
+        (N, T, D) = x.shape
+        z = np.zeros([N, 1])
         alpha = self.alpha.numpy()
         beta0 = self.beta0.numpy()
         beta  = self.beta.numpy()
@@ -78,7 +78,7 @@ class random_effect_logistic_regression:
         return q_params
     
     
-    def pointwise_IWELBO(x, y, z, q_param):
+    def pointwise_IWELBO(self, x, y, z, q_param):
         """
         Compute IWELBOs using n_MC inner Monte Carlo samples of Z's at each sample point. 
 
@@ -86,11 +86,8 @@ class random_effect_logistic_regression:
         x: 3-d array of size [N, T, D]
         y: 2-d array of size [N, T]
         z: 1-d array of size [n_MC, N]
-        beta0: scalar
-        beta: 1-d array of size [D]
-        alpha: scalar
-        mu: 1-d array of size [N]
-        sigma: 1-d array of size [N]
+        q_param['mu']: 1-d array of [N]
+        q_param['sigma']: 1-d array of [N]
 
         Returns:
         iwelbos: 1-d array of size [N]
@@ -118,18 +115,15 @@ class random_effect_logistic_regression:
         return iwelbos
     
     
-    def IWELBO(x, y, q_param, n_MC):
+    def IWELBO(self, x, y, q_param, n_MC):
         """
         Compute IWELBO
 
         Arguments:
         x: 3-d array of size [N, T, D]
         y: 2-d array of size [N, T]
-        beta0: scalar
-        beta: 1-d array of size [D]
-        alpha: scalar
-        mu: 1-d array of size [N]
-        sigma: 1-d array of size [N]
+        q_param['mu']: 1-d array of [N]
+        q_param['sigma']: 1-d array of [N]
 
         Returns:
         iwelbo: scalar value of average of iwelbo's at each sample point.
@@ -139,11 +133,11 @@ class random_effect_logistic_regression:
         mu = q_param['mu']
         sigma = q_param['sigma']
         z = norm(loc=mu, scale=sigma).rvs([n_MC, N])
-        iwelbo = tf.reduce_mean( pointwise_IWELBO(x, y, z, beta0, beta, alpha, mu, sigma) )
+        iwelbo = tf.reduce_mean( pointwise_IWELBO(x, y, z, q_param) )
         return iwelbo
     
     
-    def pointwise_dIWELBO(x, y, z, beta0, beta, alpha, mu, sigma):
+    def pointwise_dIWELBO(self, x, y, z, q_param):
         """
         Compute the coupled differences of IWELBO's at each sample point.
         Differences between "IWELBO with n_MC inner Monte Carlo samples" 
@@ -156,11 +150,8 @@ class random_effect_logistic_regression:
         x: 3-d array of size [N, T, D]
         y: 2-d array of size [N, T]
         z: 1-d array of size [n_MC, N]
-        beta0: scalar
-        beta: 1-d array of size [D]
-        alpha: scalar
-        mu: 1-d array of [N]
-        sigma: 1-d array of [N]
+        q_param['mu']: 1-d array of [N]
+        q_param['sigma']: 1-d array of [N]
 
         Returns:
         scores: 1-d array of size [N]
@@ -168,20 +159,17 @@ class random_effect_logistic_regression:
 
         (N, T, D), (n_MC, N) = x.shape, z.shape
         assert np.log2(n_MC)%1==0
-
-        mu = q_param['mu']
-        sigma = q_param['sigma']
         
         if n_MC == 1:
-            scores = pointwise_IWELBO(x, y, z, beta0, beta, alpha, mu, sigma)
+            scores = pointwise_IWELBO(x, y, z, q_param)
         else:
-            scores = pointwise_IWELBO(x, y, z, beta0, beta, alpha, mu, sigma)
-            scores -= (1/2.) * pointwise_IWELBO(x, y, z[:n_MC//2 ], beta0, beta, alpha, mu, sigma)
-            scores -= (1/2.) * pointwise_IWELBO(x, y, z[ n_MC//2:], beta0, beta, alpha, mu, sigma)
+            scores = pointwise_IWELBO(x, y, z, q_param)
+            scores -= (1/2.) * pointwise_IWELBO(x, y, z[:n_MC//2 ], q_param)
+            scores -= (1/2.) * pointwise_IWELBO(x, y, z[ n_MC//2:], q_param)
         return scores
     
     
-    def dIWELBO(x, y, q_param, level):
+    def dIWELBO(self, x, y, q_param, level):
         """
         Compute average of the coupled differences of IWELBO's with n_MC.
         Differences between "IWELBO with n_MC inner Monte Carlo samples" 
@@ -209,11 +197,11 @@ class random_effect_logistic_regression:
         sigma = q_param['sigma']
         z = norm(loc=mu, scale=sigma).rvs([n_MC, N])
 
-        score = tf.reduce_mean( pointwise_dIWELBO(x, y, z, beta0, beta, alpha, mu, sigma) )
+        score = tf.reduce_mean( pointwise_dIWELBO(x, y, z, q_param) )
         return score
     
     
-    def IWELBO_MLMC(x, y, q_param, max_level=8, w0=1-2.**(-3/2), b=2, randomize=False):
+    def IWELBO_MLMC(self, x, y, q_param, max_level=8, w0=1-2.**(-3/2), b=2, randomize=False):
         """
         Compute IWELBO by MLMC
 
@@ -266,20 +254,21 @@ class random_effect_logistic_regression:
                 continue
             x_tmp = x[offset:offset+Ns[i]]
             y_tmp = y[offset:offset+Ns[i]]
-            mu_tmp = mu[offset:offset+Ns[i]]
-            sigma_tmp = sigma[offset:offset+Ns[i]]
-
+            q_param_tmp = {
+                'mu': mu[offset:offset+Ns[i]],
+                'sigma': sigma[offset:offset+Ns[i]]
+            }
             if randomize==True:
-                iwelbo += dIWELBO(x_tmp, y_tmp, beta0, beta, alpha, mu_tmp, sigma_tmp, level=l) * Ns[i] / N / weights[i]   
+                iwelbo += dIWELBO(x_tmp, y_tmp, q_param_tmp, level=l) * Ns[i] / N / weights[i]   
             elif randomize==False:
-                iwelbo += dIWELBO(x_tmp, y_tmp, beta0, beta, alpha, mu_tmp, sigma_tmp, level=l)
+                iwelbo += dIWELBO(x_tmp, y_tmp, q_param_tmp, level=l)
 
             offset += Ns[i]
 
         return iwelbo
     
     
-    def conditional_IWELBO_SUMO(x, y, q_param, K):
+    def conditional_IWELBO_SUMO(self, x, y, q_param, K):
         """
         Compute IWELBO by SUMO for one sample point, given K
 
@@ -302,9 +291,9 @@ class random_effect_logistic_regression:
         z = tf.random.normal(mean=mu, stddev=sigma, shape=[K,N], dtype=tf.float64)
 
         # compute prob ratio of shape [K,N]
-        y_logit = beta0 + tf.reshape( x @ tf.reshape(beta,[D,1]), [1,N,T] ) + tf.reshape(z,[K,N,1]) 
+        y_logit = self.beta0 + tf.reshape( x @ tf.reshape(self.beta,[D,1]), [1,N,T] ) + tf.reshape(z,[K,N,1]) 
         p_y = tfp.distributions.Bernoulli(logits=y_logit)
-        p_z = tfp.distributions.Normal(loc=0, scale=tf.math.softplus(alpha)**(1/2.))
+        p_z = tfp.distributions.Normal(loc=0, scale=tf.math.softplus(self.alpha)**(1/2.))
         q_z = tfp.distributions.Normal(loc=mu, scale=sigma)
 
         log_prob_ratio = \
@@ -321,7 +310,7 @@ class random_effect_logistic_regression:
         return iwelbo
     
     
-    def IWELBO_SUMO(x, y, q_param, K_max=64):
+    def IWELBO_SUMO(self, x, y, q_param, K_max=64):
         """
         Compute IWELBO by MLMC
 
@@ -352,12 +341,11 @@ class random_effect_logistic_regression:
         for K, cnt in zip(unique, counts):
             x_tmp = x[offset:offset+cnt]
             y_tmp = y[offset:offset+cnt]
-            mu_tmp = mu[offset:offset+cnt]
-            sigma_tmp = sigma[offset:offset+cnt]
-            iwelbo += (1/N) * tf.reduce_sum( conditional_IWELBO_SUMO(x_tmp, y_tmp, beta0, beta, alpha, mu_tmp, sigma_tmp, K) ) 
+            q_param_tmp = {
+                'mu': mu[offset:offset+cnt],
+                'sigma': sigma[offset:offset+cnt]
+            }
+            iwelbo += (1/N) * tf.reduce_sum( conditional_IWELBO_SUMO(x_tmp, y_tmp, q_param_tmp, K) ) 
             offset += cnt
 
         return iwelbo
-    
-    
-    
