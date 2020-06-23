@@ -37,7 +37,7 @@ class random_effect_logistic_regression:
     
     def sigmoid_normal_likelihood(self, x, y):
         # Compute log p(Y=y|X=x) for N samples of (x_n, y_n) and sum them up
-        pred_prob = sigmoid_normal_prob(x, self.beta0, self.beta, self.alpha)
+        pred_prob = self.sigmoid_normal_prob(x)
         score = tf.reduce_mean(tf.reduce_sum(
             tf.math.log(pred_prob)*y + tf.math.log(1-pred_prob)*(1-y), 
             axis=1))
