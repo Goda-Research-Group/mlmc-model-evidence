@@ -2,6 +2,7 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 import numpy as np
 from matplotlib import pyplot as plt
+from scipy.stats import bernoulli, norm
 
 # Utilities
 sigmoid = lambda x: 1/(1+np.exp(-x))
@@ -129,11 +130,11 @@ class random_effect_logistic_regression:
         iwelbo: scalar value of average of iwelbo's at each sample point.
         """
 
-        N, = mu.shape
         mu = q_param['mu']
         sigma = q_param['sigma']
+        N, = mu.shape
         z = norm(loc=mu, scale=sigma).rvs([n_MC, N])
-        iwelbo = tf.reduce_mean( pointwise_IWELBO(x, y, z, q_param) )
+        iwelbo = tf.reduce_mean( self.pointwise_IWELBO(x, y, z, q_param) )
         return iwelbo
     
     
