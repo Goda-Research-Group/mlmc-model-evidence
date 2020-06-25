@@ -162,11 +162,11 @@ class random_effect_logistic_regression:
         assert np.log2(n_MC)%1==0
         
         if n_MC == 1:
-            scores = pointwise_IWELBO(x, y, z, q_param)
+            scores = self.pointwise_IWELBO(x, y, z, q_param)
         else:
-            scores = pointwise_IWELBO(x, y, z, q_param)
-            scores -= (1/2.) * pointwise_IWELBO(x, y, z[:n_MC//2 ], q_param)
-            scores -= (1/2.) * pointwise_IWELBO(x, y, z[ n_MC//2:], q_param)
+            scores = self.pointwise_IWELBO(x, y, z, q_param)
+            scores -= (1/2.) * self.pointwise_IWELBO(x, y, z[:n_MC//2 ], q_param)
+            scores -= (1/2.) * self.pointwise_IWELBO(x, y, z[ n_MC//2:], q_param)
         return scores
     
     
@@ -192,13 +192,13 @@ class random_effect_logistic_regression:
         score: scalar value of average of differnece of iwelbo's at each sample point (except when n_MC=1).
         """
 
-        N, = mu.shape
         n_MC = 2**level
         mu = q_param['mu']
+        N, = mu.shape
         sigma = q_param['sigma']
         z = norm(loc=mu, scale=sigma).rvs([n_MC, N])
 
-        score = tf.reduce_mean( pointwise_dIWELBO(x, y, z, q_param) )
+        score = tf.reduce_mean( self.pointwise_dIWELBO(x, y, z, q_param) )
         return score
     
     
@@ -260,9 +260,9 @@ class random_effect_logistic_regression:
                 'sigma': sigma[offset:offset+Ns[i]]
             }
             if randomize==True:
-                iwelbo += dIWELBO(x_tmp, y_tmp, q_param_tmp, level=l) * Ns[i] / N / weights[i]   
+                iwelbo += self.dIWELBO(x_tmp, y_tmp, q_param_tmp, level=l) * Ns[i] / N / weights[i]   
             elif randomize==False:
-                iwelbo += dIWELBO(x_tmp, y_tmp, q_param_tmp, level=l)
+                iwelbo += self.dIWELBO(x_tmp, y_tmp, q_param_tmp, level=l)
 
             offset += Ns[i]
 
@@ -346,7 +346,7 @@ class random_effect_logistic_regression:
                 'mu': mu[offset:offset+cnt],
                 'sigma': sigma[offset:offset+cnt]
             }
-            iwelbo += (1/N) * tf.reduce_sum( conditional_IWELBO_SUMO(x_tmp, y_tmp, q_param_tmp, K) ) 
+            iwelbo += (1/N) * tf.reduce_sum( self.conditional_IWELBO_SUMO(x_tmp, y_tmp, q_param_tmp, K) ) 
             offset += cnt
 
         return iwelbo
