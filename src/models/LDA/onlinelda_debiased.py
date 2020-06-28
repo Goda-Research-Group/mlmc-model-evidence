@@ -331,7 +331,8 @@ class OnlineLDA_deviased(olda.OnlineLDA):
         """
         if(level==0):
             if verbose==True:
-                print("Using this function at level=0 is not recommended for clarity. \nYou are advised to call OnlineLDA_debiased._approx_LMELBO instead.")
+                print("Using this function at level=0 is not recommended for clarity.")
+                print("You are advised to call OnlineLDA_debiased._approx_LMELBO instead.")
             return self._approx_LMELBO(wordids, wordcts, gamma, alpha, eta, lambd, n_MC=1)
         
         # lower bound of E[log p(x| beta) ]
