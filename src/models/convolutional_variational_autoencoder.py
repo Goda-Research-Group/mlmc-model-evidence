@@ -143,6 +143,10 @@ class IWAE_MLMC(IWAE):
         elif obj=='neyman_ubo':
             return  tf_reduce_logmeanexp(2.*log_prob_ratios, axis=1)\
                     -tf_reduce_logmeanexp(log_prob_ratios, axis=1)
+        elif obj=='reversedKL_ubo':
+            reversed_KL = tf.nn.softmax(log_prob_ratios, axis=1)*log_prob_ratios #shape: [batch_size, n_MC]
+            reversed_KL = tf.reduce_sum(reversed_KL, axis=1)
+            return reversed_KL
         else: 
             print(obj)
             raise ValueError("given input 'obj' is invalid.")
