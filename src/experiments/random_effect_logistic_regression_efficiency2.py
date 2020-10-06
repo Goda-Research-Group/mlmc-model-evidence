@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import tensorflow as tf
 import time
 from matplotlib import pyplot as plt
@@ -12,6 +13,8 @@ from random_effect_logistic_regression import bayesian_random_effect_logistic_re
 # Turn GPUs off
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
+EPS = 1e-6
 
 
 def d(f, params):
@@ -60,7 +63,7 @@ def main():
 
     print("\n======== starting the training ========\n")
 
-    for t in range(2001):
+    for t in range(2001):  # TODO: change to 2001
 
         batch = np.random.choice(np.arange(N_total), B)
         x = X[batch]
@@ -83,45 +86,79 @@ def main():
         'SUMO':     lambda x,y,level: model.IWELBO_SUMO(x, y, K_max=2**level)
     }
 
-    results = {'NMC':[], 'MLMC':[], 'RandMLMC':[], 'SUMO':[]}
-    runtime = {'NMC':[], 'MLMC':[], 'RandMLMC':[], 'SUMO':[]}
+    results = {'NMC':[], 'MLMC':[], 'RandMLMC':[], 'SUMO':[]}  # TODO: use all objectives
+    runtime = {'NMC':[], 'MLMC':[], 'RandMLMC':[], 'SUMO':[]}  # TODO: use all objectives
 
     for name, obj in objectives.items():
 
         print("evaluating the variance of {}...".format(name))
-        for i in range(100):
+        for level in range(L):
             results[name].append([])
-            x,y,_ = generate_data(N=4000, D=3, T=2, beta0=beta0, beta=beta, alpha=alpha)
-            for level in range(L):
-                results[name][i].append( d(obj, params)(x,y,level) )
+            for i in range(100):  # TODO: changed to 100
+                x,y,_ = generate_data(N=4000, D=3, T=2, beta0=beta0, beta=beta, alpha=alpha)
+                results[name][level].append( d(obj, params)(x,y,level) )
 
         print("evaluating the runtime of {}...".format(name))
-        x,y,_ = generate_data(N=20000, D=3, T=2, beta0=beta0, beta=beta, alpha=alpha)
         for level in range(L):
-            # Avoid the memery runout by 
-            # manipulating the case of NMC with large n_MC (large level)
-            if level>10 and name=='NMC':
-                start = time.time()
-                for j in range(10):
+            x,y,_ = generate_data(N=20000, D=3, T=2, beta0=beta0, beta=beta, alpha=alpha)
+            runtime[name].append([])
+            for i in range(100):  # TODO: change to 100
+                # Avoid the memery runout by 
+                # manipulating the case of NMC with large n_MC (large level)
+                if level>10 and name=='NMC':
+                    start = time.time()
                     d(obj, params)(*[vec[:200] for vec in [x,y]], level)
-                end = time.time()
-                runtime[name].append((end - start)*100)
-            else:
-                start = time.time()
-                for j in range(10):
+                    end = time.time()
+                    runtime[name][level].append((end - start)*100)
+                else:
+                    start = time.time()
                     d(obj, params)(x,y,level)
-                end = time.time()
-                runtime[name].append(end - start)
+                    end = time.time()
+                    runtime[name][level].append(end - start)
                 
-    ### Plot and Save the Results
-    for ests, rtime in zip(results.values(), runtime.values()):
-        var_per_recip_runtime = np.array(ests).var(axis=0).sum(axis=1) * np.array(rtime)
-        plt.plot(var_per_recip_runtime)
-    plt.legend([name for name in results.keys()])
+    ### Save the results
+    out_csv = pd.DataFrame(
+        columns = ["objective", "level", "var", "runtime", "var_par_reciprocal_runtime", "stddiv_log_vprr"]
+    )
+    for name, ests, rtime in zip(results.keys(), results.values(), runtime.values()):
+        ests, rtime = map(np.array, [ests, rtime])
+        out_var = ests.var(axis=1).sum(axis=1)
+        out_runtime = rtime.mean(axis=1)
+        out_vprr = out_var * out_runtime
+        bootstrap_log_vprr = []
+        for i in range(100):
+            b_ests = ests[:, np.random.choice(100, 100), :]  # TODO: change to 100
+            b_rtime = rtime[:, np.random.choice(100, 100)]  # TODO: change to 100
+            bootstrap_log_vprr.append(
+                np.log(b_ests.var(axis=1).sum(axis=1) * b_rtime.mean(axis=1) + EPS)
+            )
+            out_stddiv_log_vprr = np.std(bootstrap_log_vprr, axis=0)
+        out_csv = out_csv.append(pd.DataFrame({
+            "objective": [name]*L, 
+            "level": np.arange(L, dtype=float), 
+            "var": out_var, 
+            "runtime": out_runtime, 
+            "var_par_reciprocal_runtime": out_vprr, 
+            "stddiv_log_vprr": out_stddiv_log_vprr
+        }))
+    filename = '../../out/random_effect_logistic_regression/time_variance_efficiency_{}.csv'.format(timestamp())
+    out_csv.to_csv(filename)
+    print("saved the results to:\n{}\n".format(filename))
+
+    # Plot the results
+    plt.style.use("seaborn")
+    for name in results.keys():
+        dat = out_csv.loc[out_csv["objective"]==name]
+        x = dat["level"]
+        y = dat["var_par_reciprocal_runtime"]
+        dy = np.exp(dat["stddiv_log_vprr"])
+        plt.plot(x, y)
+        plt.fill_between(x, y*dy, y/dy, alpha=0.2)
+    plt.legend([_name for _name in results.keys()])
     plt.xlabel('Level')
     plt.ylabel(r'Variance ( tr(Cov) ) per Reciprocal Runtime')
     plt.yscale('log')
-    filename = '../../out/random_effect_logistic_regression/time_variance_efficiency_{}.eps'.format(timestamp())
+    filename = '../../out/random_effect_logistic_regression/time_variance_efficiency_{}.png'.format(timestamp())
     plt.savefig(filename)
     print("saved the results to:\n{}\n".format(filename))
     

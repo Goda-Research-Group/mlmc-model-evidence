@@ -28,6 +28,7 @@ def get_mlmc_cost(N, max_level, b, w0):
     cost = N * weights[0] + N * sum( weights[1:] * (2**levels[1:] + 2**(levels[1:]-1)) )
     return cost
 
+
 # function for formatting the output results
 def expand(key, val):
     # expand {"name":array([1,2,3,4,5])}
@@ -45,12 +46,19 @@ def expand_param(param):
         expanded_param.update(expand(key,val))
     return expanded_param
 
+
 def main():
     ### Initializations
     N_total = 100000
     B,T,D = (1000, 2, 3) if tf.test.is_gpu_available() else (200, 2, 3)
     model = RELR(D=D)
     optimizer = tf.keras.optimizers.Adam(0.005)
+    # pointers to the parameters of trained model
+    params = [
+        model.beta0, 
+        model.beta,
+        model.alpha
+    ]
     # True model parameters
     alpha = np.float64(1.)
     beta0 = np.float64(0.)
@@ -64,18 +72,13 @@ def main():
     X,Y,_ = generate_data(N_total, D, T, beta0, beta, alpha)
 
     objectives = {
-        "signorm":   lambda x, y: model.sigmoid_normal_likelihood(x, y),
-        "elbo":      lambda x, y: model.IWELBO(x, y, n_MC=1),
-        "iwelbo8":   lambda x, y: model.IWELBO(x, y, n_MC=8),
-        "iwelbo64":  lambda x, y: model.IWELBO(x, y, n_MC=64),
         "iwelbo512": lambda x, y: model.IWELBO(x, y, n_MC=512),
-        "iwelbo512_mlmc": lambda x, y: model.IWELBO_MLMC(x, y, max_level=9, b=1.8, w0=0.9, randomize=False),
-        "iwelbo512_randmlmc": lambda x, y: model.IWELBO_MLMC(x, y, max_level=9, b=1.8, w0=0.9, randomize=True),
+        "iwelbo512_mlmc": lambda x, y: model.IWELBO_MLMC(x, y, max_level=9, w0=0.9, randomize=False),
+        "iwelbo512_randmlmc": lambda x, y: model.IWELBO_MLMC(x, y, max_level=9, w0=0.9, randomize=True),
         "iwelbo512_sumo": lambda x, y: model.IWELBO_SUMO(x, y, K_max=512)
     }
 
-
-    n_repeat = 10
+    n_repeat = 2
     params_repeated = {name:[] for name in objectives.keys()}
 
     for name, obj in objectives.items():
@@ -84,16 +87,7 @@ def main():
         beta_s = []
         for i in range(n_repeat):
             print("training {}.... #iter:{} ".format(name,i))
-            # initialize parameters
-            model.beta0 = tf.Variable(0.0,  dtype=tf.float64)
-            model.beta  = tf.Variable(np.zeros([model.D]),  dtype=tf.float64)
-            model.alpha = tf.Variable(0.0,  dtype=tf.float64)
-            # pointers to the parameters of trained model
-            params_list = [
-                model.beta0, 
-                model.beta,
-                model.alpha
-            ]
+
             # Training
             for t in range(2001):
 
@@ -111,10 +105,10 @@ def main():
 
                 # Train step
                 with tf.GradientTape() as g:
-                    g.watch(params_list)
+                    g.watch(params)
                     loss = - obj(x, y)
-                dparams = g.gradient(loss, params_list)
-                optimizer.apply_gradients(zip(dparams, params_list))
+                dparams = g.gradient(loss, params)
+                optimizer.apply_gradients(zip(dparams, params))
 
                 if t%200==0 and i == 0:
                     print("#iter: {},\tloss: {}".format(t, loss.numpy()))

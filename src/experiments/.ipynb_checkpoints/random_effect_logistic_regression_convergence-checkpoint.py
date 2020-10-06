@@ -145,7 +145,6 @@ def main():
     conv_stats = pd.DataFrame(conv_stats)
 
     # plot results
-    plt.style.use("seaborn")
     plt.plot(conv_stats[['mean_abs_dIWELBO', 'var_dIWELBO']], linewidth=2)
 
     # plot O(2^{-l/2}), O(2^{-l}), O(2^{-2l})

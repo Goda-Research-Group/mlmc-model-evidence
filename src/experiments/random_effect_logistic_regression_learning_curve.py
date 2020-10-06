@@ -1,8 +1,10 @@
 import numpy as np
-import tensorflow as tf
 import pandas as pd
-
-from random_effect_logistic_regression_utils import generate_data, softplus, timestamp 
+import tensorflow as tf
+import time
+from matplotlib import pyplot as plt
+import seaborn as sns
+from random_effect_logistic_regression_utils import generate_data, timestamp
 
 import sys
 sys.path.append('../models')
@@ -11,8 +13,22 @@ from random_effect_logistic_regression import bayesian_random_effect_logistic_re
 
 # Turn GPUs off
 import os
-# os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
+EPS = 1e-6
+
+
+def d(f, params):
+    # Take the derivative of f
+    # returned value is a function df/d[beta0, beta, alpha]
+    def df(x,y,level):
+        with tf.GradientTape(persistent=True) as g:
+            g.watch(params)
+            target = f(x,y,level)
+        est0 = g.gradient(target, params)
+        est = np.concatenate([e.numpy().reshape([-1]) for e in est0], axis=0)
+        return est
+    return df
 
 def get_mlmc_cost(N, max_level, b, w0):
     # compute the cost of MLMC estimation 
@@ -28,60 +44,43 @@ def get_mlmc_cost(N, max_level, b, w0):
     cost = N * weights[0] + N * sum( weights[1:] * (2**levels[1:] + 2**(levels[1:]-1)) )
     return cost
 
-# function for formatting the output results
-def expand(key, val):
-    # expand {"name":array([1,2,3,4,5])}
-    # into {"name1":1, "name2":2, ..., "name5":5}
-    if type(val)==np.ndarray:
-        return {key+str(i+1): x for i,x in enumerate(val)} 
-    else:
-        return {key:val} 
-
-    
-# function for formatting the output results
-def expand_param(param):
-    expanded_param = {}
-    for key, val in param.items():
-        expanded_param.update(expand(key,val))
-    return expanded_param
-
 def main():
     ### Initializations
     N_total = 100000
     B,T,D = (1000, 2, 3) if tf.test.is_gpu_available() else (200, 2, 3)
-    model = RELR(D=D)
-    optimizer = tf.keras.optimizers.Adam(0.005)
-    # True model parameters
+
+    cost_nmc  = B * 2**9
+    cost_mlmc = get_mlmc_cost(B, max_level=9, b=1.8, w0=0.9)
+    B_mlmc = np.math.ceil(B * (cost_nmc / cost_mlmc))
+
     alpha = np.float64(1.)
     beta0 = np.float64(0.)
     beta  = np.array([0.25, 0.50, 0.75]) #np.random.randn(D) / np.sqrt(D)
-    param0 = {
-        'alpha': alpha,
-        'beta0': beta0,
-        'beta': beta
-    }
+    model = RELR(D=D)
+    optimizer = tf.keras.optimizers.Adam(0.005)
+    # True model parameters
 
     X,Y,_ = generate_data(N_total, D, T, beta0, beta, alpha)
 
     objectives = {
-        "signorm":   lambda x, y: model.sigmoid_normal_likelihood(x, y),
-        "elbo":      lambda x, y: model.IWELBO(x, y, n_MC=1),
-        "iwelbo8":   lambda x, y: model.IWELBO(x, y, n_MC=8),
-        "iwelbo64":  lambda x, y: model.IWELBO(x, y, n_MC=64),
         "iwelbo512": lambda x, y: model.IWELBO(x, y, n_MC=512),
         "iwelbo512_mlmc": lambda x, y: model.IWELBO_MLMC(x, y, max_level=9, b=1.8, w0=0.9, randomize=False),
         "iwelbo512_randmlmc": lambda x, y: model.IWELBO_MLMC(x, y, max_level=9, b=1.8, w0=0.9, randomize=True),
         "iwelbo512_sumo": lambda x, y: model.IWELBO_SUMO(x, y, K_max=512)
     }
+    n_train_steps = {
+        "iwelbo512": 2000,
+        "iwelbo512_mlmc": 1000,
+        "iwelbo512_randmlmc": 1000,
+        "iwelbo512_sumo": 3000
+    }
 
+    data = [] 
 
-    n_repeat = 10
+    n_repeat = 30 # TODO: change to 20
     params_repeated = {name:[] for name in objectives.keys()}
 
     for name, obj in objectives.items():
-        alpha_s = []
-        beta0_s = []
-        beta_s = []
         for i in range(n_repeat):
             print("training {}.... #iter:{} ".format(name,i))
             # initialize parameters
@@ -94,15 +93,15 @@ def main():
                 model.beta,
                 model.alpha
             ]
+
             # Training
-            for t in range(2001):
+            start = time.time()
+
+            for t in range(n_train_steps[name] + 1):
 
                 # Balance the cost of mlmc and nmc when level=9 (n_MC=512)
                 # by changing the batch size adoptively
                 if 'mlmc' in name:
-                    cost_nmc  = B * 2**9
-                    cost_mlmc = get_mlmc_cost(B, max_level=9, b=1.8, w0=0.9)
-                    B_mlmc = np.math.ceil(B * (cost_nmc / cost_mlmc))
                     batch = np.random.choice(np.arange(N_total), B_mlmc)
                 else:
                     batch = np.random.choice(np.arange(N_total), B)
@@ -116,43 +115,56 @@ def main():
                 dparams = g.gradient(loss, params_list)
                 optimizer.apply_gradients(zip(dparams, params_list))
 
+                # Take a log
+                if t%10==0:
+                    data.append({
+                        "objective": name,
+                        "#iter": i,
+                        "step": t,
+                        "elapsed time": time.time() - start,
+                        "alpha": model.alpha.numpy(),
+                        "beta0": model.beta0.numpy(),
+                        "beta1": model.beta.numpy()[0],
+                        "beta2": model.beta.numpy()[1],
+                        "beta3": model.beta.numpy()[2],
+                        "squared error": sum(
+                            np.concatenate([
+                                [alpha - model.alpha.numpy()],
+                                [beta0 - model.beta0.numpy()],
+                                beta - model.beta.numpy()
+                            ]) * 2
+                        )
+                    })
+
                 if t%200==0 and i == 0:
                     print("#iter: {},\tloss: {}".format(t, loss.numpy()))
 
-            alpha_s.append(model.alpha.numpy())
-            beta0_s.append(model.beta0.numpy())
-            beta_s.append(model.beta.numpy())
         print()
-        params_repeated[name] = {
-                'alpha': np.array(alpha_s),
-                'beta0': np.array(beta0_s),
-                'beta': np.array(beta_s)
-        }
 
-    params = {'ground_truth': expand_param(param0)}
-    params['ground_truth'].update({'MSE':0})
-    for name in objectives.keys():
-        param_repeated = params_repeated[name]
-        param_mean   = expand_param({name: array.mean(axis=0) for name, array in  param_repeated.items()})
-        param_var = expand_param({name: array.std(axis=0) for name, array in  param_repeated.items()})
-        param = {name_:'{:.5f} ± {:.5f}'.format(mean,var**(1/2.)) 
-                 for name_, mean, var 
-                 in zip( param_mean.keys(), param_mean.values(), param_var.values() )}
-        error = [var+(mean-true_mean)**2 
-                 for var, mean, true_mean 
-                 in zip( param_var.values(), param_mean.values(), params['ground_truth'].values() )]
-        MSE = sum(error)
-        param.update({'MSE':MSE})
-        params.update({name :param})
-
-    data = pd.DataFrame(params).T
 
     print("\n======== Results ========\n")
+    data = pd.DataFrame(
+        data=data,
+        columns = [
+            "objective", "#iter", "elapsed time", "step", 
+            "alpha", "beta0", "beta1", "beta2", "beta3", "squared error"
+        ]
+    )
     print(data)
-    filename = '../../out/random_effect_logistic_regression/MLE_estimation_accuracy_{}.csv'.format(timestamp())
+    filename = '../../out/random_effect_logistic_regression/learning_curve_{}.csv'.format(timestamp())
     data.to_csv(filename)
     print("\nSaved the results to:\n{}".format(filename))
+
+    # Plot the results
+    plt.style.use("seaborn-whitegrid")
+    data["MSE"] = data["squared error"]
+    data["elapsed time"] = np.ceil(data["elapsed time"]/5)*5
+    sns.lineplot(data=data, x="elapsed time", y="MSE", hue="objective")
+    max_time = float(data[["objective", "elapsed time"]].groupby(by="objective").max().min())
+    plt.xlim([0, max_time])
+    filename = '../../out/random_effect_logistic_regression/learning_curve_{}.png'.format(timestamp())
+    plt.savefig(filename)
+    print("saved the results to:\n{}\n".format(filename))
     
-    
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
