@@ -78,7 +78,7 @@ def main():
         "iwelbo512": lambda x, y: model.IWELBO(x, y, n_MC=512),
         "iwelbo512_mlmc": lambda x, y: model.IWELBO_MLMC(x, y, max_level=9, b=1.8, w0=0.9, randomize=False),
         "iwelbo512_randmlmc": lambda x, y: model.IWELBO_MLMC(x, y, max_level=9, b=1.8, w0=0.9, randomize=True),
-        "iwelbo512_sumo": lambda x, y: model.IWELBO_SUMO(x, y, K_max=512)
+       "iwelbo512_sumo": lambda x, y: model.IWELBO_SUMO(x, y, K_max=512)
     }
 
 
@@ -101,7 +101,7 @@ def main():
                 model.beta,
                 model.alpha
             ]
-            # Training
+           # Training
             for t in range(2001):
 
                 # Balance the cost of mlmc and nmc when level=9 (n_MC=512)
