@@ -49,6 +49,13 @@ def main():
     ### Initializations
     N_total = 100000
     B,T,D = (1000, 2, 3) if tf.test.is_gpu_available() else (200, 2, 3)
+
+    cost_nmc  = B * 2**9
+    cost_mlmc = get_mlmc_cost(B, max_level=9, b=1.8, w0=0.9)
+    cost_sumo = B * 9
+    B_mlmc = np.math.ceil(B * (cost_nmc / cost_mlmc))
+    B_sumo = np.math.ceil(B * (cost_nmc / cost_sumo))
+
     model = RELR(D=D)
     optimizer = tf.keras.optimizers.Adam(0.005)
     # True model parameters
@@ -100,10 +107,9 @@ def main():
                 # Balance the cost of mlmc and nmc when level=9 (n_MC=512)
                 # by changing the batch size adoptively
                 if 'mlmc' in name:
-                    cost_nmc  = B * 2**9
-                    cost_mlmc = get_mlmc_cost(B, max_level=9, b=1.8, w0=0.9)
-                    B_mlmc = np.math.ceil(B * (cost_nmc / cost_mlmc))
                     batch = np.random.choice(np.arange(N_total), B_mlmc)
+                elif 'sumo' in name:
+                    batch = np.random.choice(np.arange(N_total), B_sumo)
                 else:
                     batch = np.random.choice(np.arange(N_total), B)
                 x = X[batch]

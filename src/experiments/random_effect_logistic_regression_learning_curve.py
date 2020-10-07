@@ -47,11 +47,13 @@ def get_mlmc_cost(N, max_level, b, w0):
 def main():
     ### Initializations
     N_total = 100000
-    B,T,D = (1000, 2, 3) if tf.test.is_gpu_available() else (200, 2, 3)
+    B,T,D = (1000, 2, 3) if tf.test.is_gpu_available() else (100, 2, 3)
 
     cost_nmc  = B * 2**9
     cost_mlmc = get_mlmc_cost(B, max_level=9, b=1.8, w0=0.9)
+    cost_sumo = B * 9
     B_mlmc = np.math.ceil(B * (cost_nmc / cost_mlmc))
+    B_sumo = np.math.ceil(B * (cost_nmc / cost_sumo))
 
     alpha = np.float64(1.)
     beta0 = np.float64(0.)
@@ -77,7 +79,7 @@ def main():
 
     data = [] 
 
-    n_repeat = 30 # TODO: change to 20
+    n_repeat = 100 # TODO: change to 20
     params_repeated = {name:[] for name in objectives.keys()}
 
     for name, obj in objectives.items():
@@ -103,6 +105,8 @@ def main():
                 # by changing the batch size adoptively
                 if 'mlmc' in name:
                     batch = np.random.choice(np.arange(N_total), B_mlmc)
+                elif 'sumo' in name:
+                    batch = np.random.choice(np.arange(N_total), B_sumo)
                 else:
                     batch = np.random.choice(np.arange(N_total), B)
                 x = X[batch]
@@ -116,7 +120,7 @@ def main():
                 optimizer.apply_gradients(zip(dparams, params_list))
 
                 # Take a log
-                if t%10==0:
+                if t%5==0:
                     data.append({
                         "objective": name,
                         "#iter": i,
@@ -132,7 +136,7 @@ def main():
                                 [alpha - model.alpha.numpy()],
                                 [beta0 - model.beta0.numpy()],
                                 beta - model.beta.numpy()
-                            ]) * 2
+                            ]) ** 2
                         )
                     })
 
@@ -157,14 +161,16 @@ def main():
 
     # Plot the results
     plt.style.use("seaborn-whitegrid")
+    sns.set_palette("tab10")
     data["MSE"] = data["squared error"]
-    data["elapsed time"] = np.ceil(data["elapsed time"]/5)*5
+    data["elapsed time"] = np.ceil(data["elapsed time"]/20)*20
     sns.lineplot(data=data, x="elapsed time", y="MSE", hue="objective")
     max_time = float(data[["objective", "elapsed time"]].groupby(by="objective").max().min())
     plt.xlim([0, max_time])
+    plt.yscale("log")
     filename = '../../out/random_effect_logistic_regression/learning_curve_{}.png'.format(timestamp())
     plt.savefig(filename)
     print("saved the results to:\n{}\n".format(filename))
-    
+        
 if __name__=="__main__":
     main()
