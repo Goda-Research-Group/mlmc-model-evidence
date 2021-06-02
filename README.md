@@ -1,6 +1,7 @@
 # mlmc-model-evidence
 
-The multilevel Monte Carlo methods (MLMC) are sophisticated variance reduction technique of Monte Carlo computation. In the context of the Bayesian statistics, it can be applied to efficiently estimate/maximize the model evidence (log marginal likelihood) when we want to fit the model to a large dataset, as discussed in [efficient debiased variational Bayes by MLMC](https://arxiv.org/abs/2001.04676).
+The multilevel Monte Carlo methods (MLMC) are sophisticated variance reduction technique of Monte Carlo computation. In the context of the Bayesian statistics, it can be applied to efficiently estimate/maximize the model evidence (log marginal likelihood) when we want to fit the model to a large dataset, as discussed in [Efficient Debiased Evidence Estimation by Multilevel Monte Carlo Sampling
+](https://arxiv.org/abs/2001.04676).
 
 This repository provides examples of application of MLMC to Bayesian statistical models. The implementation is in Python 3 and Tensorflow 2.
 
