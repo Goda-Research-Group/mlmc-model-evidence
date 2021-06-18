@@ -87,3 +87,5 @@ mlmc-model-evidence/src/experiments$ python random_effect_logistic_regression_ef
 mlmc-model-evidence/src/experiments$ python random_effect_logistic_regression_efficiency.py --input_files ../../out/random_effect_logistic_regression/efficiency.csv --output_file  ../../out/random_effect_logistic_regression/efficiency.pdf
 ```
 
+## Poster
+![image](./uai_poster.jpg)
